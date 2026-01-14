@@ -1,45 +1,48 @@
-import io
 import streamlit as st
-from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas
+import requests
+
+LABELARY = "https://api.labelary.com/v1/printers/{dpmm}dpmm/labels/{w}x{h}/0/"
 
 
-def txt_to_pdf(txt_content: str) -> bytes:
-    buffer = io.BytesIO()
-    c = canvas.Canvas(buffer, pagesize=A4)
-
-    width, height = A4
-    x_margin = 40
-    y_margin = 40
-    y = height - y_margin
-
-    for line in txt_content.splitlines():
-        if y < y_margin:
-            c.showPage()
-            y = height - y_margin
-        c.drawString(x_margin, y, line)
-        y -= 14  # espaçamento entre linhas
-
-    c.save()
-    buffer.seek(0)
-    return buffer.getvalue()
+def zpl_to_pdf_bytes(zpl: str, dpmm: int, w_in: float, h_in: float) -> bytes:
+    url = LABELARY.format(dpmm=dpmm, w=w_in, h=h_in)
+    headers = {"Accept": "application/pdf"}
+    r = requests.post(url, data=zpl.encode("utf-8"), headers=headers, timeout=90)
+    if not r.ok:
+        raise RuntimeError(f"Labelary {r.status_code}: {r.text[:600]}")
+    return r.content
 
 
-st.set_page_config(page_title="TXT → PDF", layout="centered")
-st.title("TXT → PDF")
+st.set_page_config(page_title="ZPL (texto) → PDF", layout="centered")
+st.title("ZPL (texto) → PDF")
 
-uploaded = st.file_uploader("Envie um arquivo .txt", type=["txt"])
+col1, col2, col3 = st.columns(3)
+with col1:
+    dpmm = st.selectbox("Resolução (dpmm)", [8, 12, 24], index=0)  # 203/300/600dpi aprox
+with col2:
+    w_in = st.number_input("Largura (pol)", min_value=0.5, max_value=10.0, value=4.0, step=0.25)
+with col3:
+    h_in = st.number_input("Altura (pol)", min_value=0.5, max_value=12.0, value=6.0, step=0.25)
 
-if uploaded:
-    txt = uploaded.getvalue().decode("utf-8", errors="replace")
+zpl_text = st.text_area("Cole o ZPL aqui", height=260, placeholder="^XA ... ^XZ")
 
-    st.text_area("Conteúdo do TXT", txt, height=300)
+uploaded = st.file_uploader("Ou envie um arquivo .txt/.zpl", type=["txt", "zpl"])
 
-    if st.button("Gerar PDF"):
-        pdf_bytes = txt_to_pdf(txt)
+if uploaded is not None:
+    zpl_text = uploaded.getvalue().decode("utf-8", errors="replace")
+    st.info(f"Arquivo carregado: {uploaded.name}")
+
+st.caption("Obs.: o PDF vai sair no tamanho que você definir acima (polegadas). Ajusta largura/altura se cortar.")
+
+if st.button("Gerar PDF", disabled=not zpl_text.strip()):
+    try:
+        pdf_bytes = zpl_to_pdf_bytes(zpl_text, dpmm, w_in, h_in)
+        st.success("Gerado.")
         st.download_button(
-            label="Baixar PDF",
+            "Baixar PDF",
             data=pdf_bytes,
-            file_name=uploaded.name.replace(".txt", ".pdf"),
+            file_name="label.pdf",
             mime="application/pdf",
         )
+    except Exception as e:
+        st.error(str(e))
