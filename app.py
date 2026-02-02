@@ -49,7 +49,6 @@ def split_by_dgr_blocks(text: str) -> List[str]:
 def split_by_xa_xz(text: str) -> List[str]:
     """
     Fallback: separa por ^XA...^XZ quando não existe ~DGR:
-    (não é o caso típico Shopee, mas ajuda)
     """
     s = text.strip()
     if not s:
@@ -63,7 +62,6 @@ def split_by_xa_xz(text: str) -> List[str]:
             break
         b = s.find("^XZ", a)
         if b == -1:
-            # sem fechamento; pega até final
             blocks.append(s[a:].strip())
             break
         blocks.append(s[a : b + 3].strip())
@@ -73,12 +71,9 @@ def split_by_xa_xz(text: str) -> List[str]:
 
 
 def split_labels(text: str) -> List[str]:
-    # primeiro tenta o formato Shopee (blocos por ~DGR)
     blocks = split_by_dgr_blocks(text)
     if blocks:
         return blocks
-
-    # fallback
     return split_by_xa_xz(text)
 
 
@@ -142,13 +137,13 @@ st.markdown(
 Esse app é feito pro TXT da Shopee: ele vem com **múltiplas etiquetas** e geralmente
 cada etiqueta começa com `~DGR:` (imagem Z64) + depois `^XA...^XZ`.
 
-A conversão correta é **1 request por etiqueta** (PNG) e depois juntar em PDF.
+Agora também aceita **ZIP contendo o TXT/ZPL**.
 """
 )
 
 col1, col2, col3 = st.columns(3)
 with col1:
-    dpmm = st.selectbox("Resolução (dpmm)", [8, 12, 24], index=0, help="Começa em 8 (203dpi).")
+    dpmm = st.selectbox("Resolução (dpmm)", [8, 12, 24], index=0)
 with col2:
     w_in = st.number_input("Largura (pol)", min_value=0.5, max_value=10.0, value=4.0, step=0.25)
 with col3:
@@ -156,14 +151,40 @@ with col3:
 
 zpl_text = st.text_area("Cole o conteúdo do TXT/ZPL aqui", height=260)
 
-uploaded = st.file_uploader("Ou envie o TXT da Shopee (.txt/.zpl)", type=["txt", "zpl"])
+uploaded = st.file_uploader(
+    "Ou envie o TXT/ZPL ou um ZIP contendo o TXT",
+    type=["txt", "zpl", "zip"]
+)
+
 if uploaded is not None:
-    zpl_text = uploaded.getvalue().decode("utf-8", errors="replace")
-    st.info(f"Arquivo carregado: {uploaded.name}")
+    if uploaded.name.lower().endswith(".zip"):
+        with zipfile.ZipFile(uploaded) as z:
+            txt_files = [
+                f for f in z.namelist()
+                if f.lower().endswith((".txt", ".zpl"))
+            ]
+
+            if not txt_files:
+                st.error("O ZIP não contém nenhum arquivo .txt ou .zpl")
+                st.stop()
+
+            file_name = txt_files[0]
+            with z.open(file_name) as f:
+                zpl_text = f.read().decode("utf-8", errors="replace")
+
+            st.info(f"ZIP carregado: {uploaded.name}")
+            st.success(f"Arquivo usado: {file_name}")
+    else:
+        zpl_text = uploaded.getvalue().decode("utf-8", errors="replace")
+        st.info(f"Arquivo carregado: {uploaded.name}")
 
 labels = split_labels(zpl_text) if zpl_text.strip() else []
+
 if labels:
-    st.caption(f"Etiquetas detectadas: {len(labels)} (split por {'~DGR' if '~DGR:' in zpl_text else '^XA/^XZ'})")
+    st.caption(
+        f"Etiquetas detectadas: {len(labels)} "
+        f"(split por {'~DGR' if '~DGR:' in zpl_text else '^XA/^XZ'})"
+    )
 
 limit = st.number_input(
     "Converter quantas etiquetas (0 = todas)",
@@ -180,7 +201,7 @@ if st.button("Gerar PDF", disabled=not labels):
         to_convert = labels if limit == 0 else labels[:limit]
         png_items: List[Tuple[str, bytes]] = []
 
-        with st.spinner("Renderizando (PNG) etiqueta por etiqueta..."):
+        with st.spinner("Renderizando etiquetas (PNG)..."):
             for i, block in enumerate(to_convert, start=1):
                 png = cached_png(block, dpmm, w_in, h_in)
                 png_items.append((f"label_{i:03d}.png", png))
@@ -188,7 +209,8 @@ if st.button("Gerar PDF", disabled=not labels):
         with st.spinner("Montando PDF multipágina..."):
             pdf_bytes = pngs_to_pdf_bytes(png_items)
 
-        st.success("OK.")
+        st.success("Conversão concluída.")
+
         st.download_button(
             "Baixar PDF",
             data=pdf_bytes,
@@ -207,4 +229,7 @@ if st.button("Gerar PDF", disabled=not labels):
 
     except Exception as e:
         st.error(str(e))
-        st.info("Se cortar a etiqueta: ajuste largura/altura. Se der 429: espere e tente de novo.")
+        st.info(
+            "Se a etiqueta cortar, ajuste largura/altura. "
+            "Se der erro 429, aguarde alguns minutos e tente novamente."
+        )
